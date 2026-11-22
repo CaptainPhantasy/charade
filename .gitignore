@@ -17,3 +17,6 @@ coverage/
 *.charade.prev
 *.charade.bak
 state/
+
+# Added by ggshield
+.cache_ggshield
