@@ -20,3 +20,6 @@ state/
 
 # Added by ggshield
 .cache_ggshield
+
+# Internal quarantine — preserved locally, never published.
+.quarantine/

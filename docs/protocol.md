@@ -272,7 +272,7 @@ the values.
 
 ### 5.5 Proxy
 
-`/v1/proxy/:service/<remaining-path>?<query>` preserves the existing broker's
+`/v1/proxy/:service/<remaining-path>?<query>` preserves the established
 compatibility shape. The broker:
 
 - verifies the lease names the same service;

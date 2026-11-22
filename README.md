@@ -50,7 +50,6 @@ no-telemetry guard, the build, and the tests. Requires Node.js 22 or newer.
 - [Defaults — proposed, not applied](docs/defaults.md)
 - [Owner policy and authority](docs/owner-policy.md)
 - [Brand](docs/brand.md)
-- [ADRs](docs/adr/)
 
 ## License
 
