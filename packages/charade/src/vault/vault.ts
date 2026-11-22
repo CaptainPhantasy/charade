@@ -6,7 +6,7 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { canonicalJson } from "../core/canonical-json.js";
 import {
@@ -28,6 +28,7 @@ import {
 } from "./format.js";
 import { acquireLock, writeAtomic } from "./atomic.js";
 import type { CustodyAdapter } from "./custody.js";
+import { generateOwnerKeyPair, publicKeyFingerprint } from "../authority/keys.js";
 
 export interface VaultPaths {
   readonly home: string;
@@ -55,6 +56,7 @@ export interface InitResult {
   readonly vaultId: string;
   /** Base64url. Shown once; never stored in plaintext. */
   readonly recoveryKey: string;
+  readonly ownerPublicKey: string;
   readonly header: VaultHeader;
 }
 
@@ -160,18 +162,26 @@ export function initVault(options: InitOptions): InitResult {
       cipher: "AES-256-GCM",
       slots,
     };
+    const owner = generateOwnerKeyPair();
     const payload: VaultPayload = {
       schema: "charade.vault-payload/1",
       vaultId,
       revision: 1,
       createdAt,
       canary: randomBytes(16).toString("base64url"),
+      owner: { ...owner, createdAt },
       secrets: [],
     };
 
     try {
+      writeOwnerPub(paths.home, owner.publicKey, createdAt);
       writeSealed(masterKey, paths.vault, header, payload);
     } catch (error) {
+      try {
+        unlinkSync(join(paths.home, "owner.pub"));
+      } catch {
+        // Best effort cleanup of the failed init.
+      }
       if (options.custodyAdapter && custodyAccount) {
         options.custodyAdapter.delete(custodyAccount);
       }
@@ -182,6 +192,7 @@ export function initVault(options: InitOptions): InitResult {
       vaultPath: paths.vault,
       vaultId,
       recoveryKey: recoveryKey.toString("base64url"),
+      ownerPublicKey: owner.publicKey,
       header,
     };
   } finally {
@@ -209,6 +220,44 @@ export function openWithRecovery(home: string, recoveryKeyBase64url: string): Op
     throw new VaultError("recovery key is not the expected size");
   }
   return finishOpen(paths.vault, decoded, key, slot);
+}
+
+export interface OwnerIdentity {
+  readonly privateKey: string;
+  readonly publicKey: string;
+}
+
+export function getOwnerKeyPair(open: OpenVault): OwnerIdentity {
+  if (!open.payload.owner) {
+    throw new VaultError("vault has no owner identity; run `charade policy init`");
+  }
+  return {
+    privateKey: open.payload.owner.privateKey,
+    publicKey: open.payload.owner.publicKey,
+  };
+}
+
+/** Upgrade a vault created before owner identities existed. */
+export function ensureOwnerIdentity(open: OpenVault): OpenVault {
+  if (open.payload.owner) return open;
+  const createdAt = new Date().toISOString();
+  const owner = generateOwnerKeyPair();
+  const next = savePayload(open, {
+    ...open.payload,
+    owner: { ...owner, createdAt },
+  });
+  writeOwnerPub(dirname(next.vaultPath), owner.publicKey, createdAt);
+  return next;
+}
+
+function writeOwnerPub(home: string, publicKey: string, createdAt: string): void {
+  const record = {
+    schema: "charade.owner.pub/1",
+    publicKey,
+    fingerprint: publicKeyFingerprint(publicKey),
+    createdAt,
+  };
+  writeAtomic(join(home, "owner.pub"), Buffer.from(canonicalJson(record), "utf8"), 0o600);
 }
 
 export function openWithCustody(home: string, adapter: CustodyAdapter): OpenVault {

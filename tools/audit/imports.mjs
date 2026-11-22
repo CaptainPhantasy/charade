@@ -20,6 +20,9 @@ const VAULT = new Set([
   "node:buffer",
 ]);
 const KEYRING = new Set(["node:fs", "node:path", "node:crypto", "node:os", "node:buffer"]);
+const AUTHORITY = new Set(["node:crypto", "node:buffer", "node:fs", "node:path"]);
+const REGISTRY = new Set(["node:fs", "node:path", "node:crypto", "node:buffer"]);
+const AUDIT = new Set(["node:fs", "node:path", "node:crypto", "node:buffer"]);
 const ENSURE = new Set(["node:fs", "node:path", "node:http", "node:net"]);
 const BROKER = new Set([
   "node:http",
@@ -69,6 +72,9 @@ function allowedFor(rel) {
   if (rel.includes("packages/charade/src/core/")) return { set: CORE, allowRelative: "core" };
   if (rel.includes("packages/charade/src/vault/")) return { set: VAULT, allowRelative: "vault" };
   if (rel.includes("packages/charade/src/keyring/")) return { set: KEYRING, allowRelative: "keyring" };
+  if (rel.includes("packages/charade/src/authority/")) return { set: AUTHORITY, allowRelative: "authority" };
+  if (rel.includes("packages/charade/src/registry/")) return { set: REGISTRY, allowRelative: "registry" };
+  if (rel.includes("packages/charade/src/audit/")) return { set: AUDIT, allowRelative: "audit" };
   if (rel.includes("packages/charade/src/broker/")) return { set: BROKER, allowRelative: "broker" };
   if (rel.includes("packages/charade/src/cli/")) return { set: null, allowRelative: "cli" };
   if (rel.includes("packages/charade-ensure/src/")) return { set: ENSURE, allowRelative: "ensure" };

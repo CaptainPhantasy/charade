@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, it } from "node:test";
 import { openVault, readRecoveryKit } from "../src/vault/vault.js";
+import { loadGrants, loadPolicy } from "../src/authority/store.js";
+import { verifyGrant } from "../src/authority/grants.js";
 
 const CLI = fileURLToPath(new URL("../src/cli/main.js", import.meta.url));
 const PASSPHRASE = "correct horse battery staple";
@@ -103,4 +105,136 @@ describe("charade CLI", () => {
     assert.equal(result.status, 2);
     assert.match(result.stderr, /--home/);
   });
+
+  it("signs owner-changed policy values from a policy file", () => {
+    const home = tempHome();
+    const pass = passFile(home);
+    assert.equal(run(["init", "--home", home, "--passphrase-file", pass]).status, 0);
+    const overrides = join(home, "policy-overrides.json");
+    writeFileSync(
+      overrides,
+      JSON.stringify({ limits: { maxLeaseTtlSeconds: 600, defaultLeaseTtlSeconds: 300 } }),
+      { mode: 0o600 },
+    );
+    const result = run([
+      "policy",
+      "init",
+      "--home",
+      home,
+      "--policy-file",
+      overrides,
+      "--passphrase-file",
+      pass,
+    ]);
+    assert.equal(result.status, 0);
+    const policy = loadPolicy(home);
+    assert.equal(policy.limits.maxLeaseTtlSeconds, 600);
+    assert.equal(policy.limits.defaultLeaseTtlSeconds, 300);
+  });
+
+  it("requires explicit policy and grant acceptance, then signs, verifies, and revokes", () => {
+    const home = tempHome();
+    const pass = passFile(home);
+    assert.equal(run(["init", "--home", home, "--passphrase-file", pass]).status, 0);
+
+    const noPolicy = run(["policy", "init", "--home", home]);
+    assert.equal(noPolicy.status, 2);
+    assert.equal(existsSync(join(home, "policy.json")), false);
+
+    const signedPolicy = run([
+      "policy",
+      "init",
+      "--home",
+      home,
+      "--accept-defaults",
+      "--passphrase-file",
+      pass,
+    ]);
+    assert.equal(signedPolicy.status, 0);
+    assert.equal(existsSync(join(home, "policy.json")), true);
+
+    writeRegistry(home);
+    assert.equal(run(["registry", "validate", "--home", home]).status, 0);
+
+    const noGrant = run([
+      "grant",
+      "create",
+      "--home",
+      home,
+      "--consumer",
+      "c1",
+      "--services",
+      "svc",
+      "--duration",
+      "24h",
+    ]);
+    assert.equal(noGrant.status, 2);
+    assert.equal(existsSync(join(home, "grants.json")), false);
+
+    const signedGrant = run([
+      "grant",
+      "create",
+      "--home",
+      home,
+      "--consumer",
+      "c1",
+      "--services",
+      "svc",
+      "--duration",
+      "24h",
+      "--calls",
+      "100",
+      "--accept",
+      "--passphrase-file",
+      pass,
+    ]);
+    assert.equal(signedGrant.status, 0);
+    const grants = loadGrants(home);
+    assert.equal(grants.length, 1);
+    assert.equal(verifyGrant(loadPolicy(home), grants[0]!, new Date()).ok, true);
+    assert.equal(run(["receipts", "verify", "--home", home]).status, 0);
+
+    const revoked = run([
+      "grant",
+      "revoke",
+      "--home",
+      home,
+      "--id",
+      grants[0]!.grantId,
+      "--accept",
+    ]);
+    assert.equal(revoked.status, 0);
+    assert.equal(loadGrants(home).length, 0);
+    assert.equal(run(["receipts", "verify", "--home", home]).status, 0);
+  });
 });
+
+function writeRegistry(home: string): void {
+  const now = new Date().toISOString();
+  const registry = {
+    schema: "charade.registry/1",
+    revision: 1,
+    services: [
+      {
+        id: "svc",
+        name: "Example",
+        url: "https://example.test",
+        transport: "http",
+        auth: { type: "header", name: "Authorization", template: "Bearer ${SVC_KEY}" },
+        actions: { read: ["GET /v1/*"], write: ["POST /v1/*"], destructive: [] },
+      },
+    ],
+    consumers: [
+      { id: "c1", name: "Consumer", services: ["svc"], deviceIds: ["d1"], createdAt: now },
+    ],
+    devices: [
+      {
+        id: "d1",
+        consumerId: "c1",
+        publicKey: Buffer.alloc(32, 3).toString("base64url"),
+        createdAt: now,
+      },
+    ],
+  };
+  writeFileSync(join(home, "registry.json"), JSON.stringify(registry), { mode: 0o600 });
+}

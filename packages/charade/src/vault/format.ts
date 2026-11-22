@@ -45,12 +45,21 @@ export interface VaultHeader {
   readonly slots: readonly VaultSlot[];
 }
 
+export interface OwnerRecord {
+  /** PKCS#8 DER, base64. Protected by the encrypted payload. */
+  readonly privateKey: string;
+  /** Raw 32-byte Ed25519 public key, base64url. */
+  readonly publicKey: string;
+  readonly createdAt: string;
+}
+
 export interface VaultPayload {
   readonly schema: "charade.vault-payload/1";
   readonly vaultId: string;
   readonly revision: number;
   readonly createdAt: string;
   readonly canary: string;
+  readonly owner?: OwnerRecord;
   readonly secrets: readonly unknown[];
 }
 

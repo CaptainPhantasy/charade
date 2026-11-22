@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   backupVault,
   drillBackup,
+  getOwnerKeyPair,
   initVault,
   openVault,
   openWithCustody,
@@ -26,6 +27,7 @@ import {
 } from "../src/vault/vault.js";
 import { acquireLock } from "../src/vault/atomic.js";
 import type { CustodyAdapter } from "../src/vault/custody.js";
+import { signDomain, verifyDomain } from "../src/authority/keys.js";
 
 class MemoryCustody implements CustodyAdapter {
   readonly id = "macos-keychain" as const;
@@ -78,6 +80,13 @@ describe("vault", () => {
     assert.equal(opened.payload.vaultId, opened.header.vaultId);
     assert.equal(opened.payload.revision, 1);
     assert.ok(opened.payload.canary.length > 0);
+  });
+
+  it("creates an owner identity inside the encrypted payload", () => {
+    const owner = getOwnerKeyPair(opened);
+    assert.equal(Buffer.from(owner.publicKey, "base64url").length, 32);
+    const signature = signDomain(owner.privateKey, "charade-test\u0000", { a: 1 });
+    assert.equal(verifyDomain(owner.publicKey, "charade-test\u0000", { a: 1 }, signature), true);
   });
 
   it("does not leave plaintext in the vault file", () => {
