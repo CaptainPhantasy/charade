@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   statSync,
+  unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -26,6 +27,7 @@ import {
   type VaultSlot,
 } from "./format.js";
 import { acquireLock, writeAtomic } from "./atomic.js";
+import type { CustodyAdapter } from "./custody.js";
 
 export interface VaultPaths {
   readonly home: string;
@@ -45,6 +47,7 @@ export interface InitOptions {
   readonly home: string;
   readonly passphrase: string;
   readonly now?: Date;
+  readonly custodyAdapter?: CustodyAdapter;
 }
 
 export interface InitResult {
@@ -119,13 +122,43 @@ export function initVault(options: InitOptions): InitResult {
       },
     };
 
+    const slots: VaultSlot[] = [passSlot, recoverySlot];
+    let custodyAccount: string | undefined;
+    if (options.custodyAdapter) {
+      const availability = options.custodyAdapter.available();
+      if (!availability.ok) {
+        throw new VaultError(availability.reason ?? "the custody backend is unavailable");
+      }
+      custodyAccount = `vault:${vaultId}`;
+      const custodyKek = randomKey();
+      options.custodyAdapter.set(custodyAccount, custodyKek);
+      const custodySlotId = `s_${randomBytes(6).toString("hex")}`;
+      const custodyBox = seal(
+        custodyKek,
+        masterKey,
+        slotAad(custodySlotId, options.custodyAdapter.id),
+      );
+      slots.push({
+        slotId: custodySlotId,
+        type: options.custodyAdapter.id,
+        createdAt,
+        service: options.custodyAdapter.service,
+        account: custodyAccount,
+        wrap: {
+          nonce: custodyBox.nonce.toString("base64url"),
+          ciphertext: custodyBox.ciphertext.toString("base64url"),
+          tag: custodyBox.tag.toString("base64url"),
+        },
+      });
+    }
+
     const header: VaultHeader = {
       schema: "charade.vault-header/1",
       vaultId,
       revision: 1,
       createdAt,
       cipher: "AES-256-GCM",
-      slots: [passSlot, recoverySlot],
+      slots,
     };
     const payload: VaultPayload = {
       schema: "charade.vault-payload/1",
@@ -136,15 +169,14 @@ export function initVault(options: InitOptions): InitResult {
       secrets: [],
     };
 
-    const sealed = seal(
-      masterKey,
-      Buffer.from(canonicalJson(payload), "utf8"),
-      headerAad(header),
-    );
-    writeAtomic(
-      paths.vault,
-      encodeVault(header, sealed.nonce, sealed.ciphertext, sealed.tag),
-    );
+    try {
+      writeSealed(masterKey, paths.vault, header, payload);
+    } catch (error) {
+      if (options.custodyAdapter && custodyAccount) {
+        options.custodyAdapter.delete(custodyAccount);
+      }
+      throw error;
+    }
 
     return {
       vaultPath: paths.vault,
@@ -175,6 +207,19 @@ export function openWithRecovery(home: string, recoveryKeyBase64url: string): Op
   const key = Buffer.from(recoveryKeyBase64url, "base64url");
   if (key.length !== MASTER_KEY_BYTES) {
     throw new VaultError("recovery key is not the expected size");
+  }
+  return finishOpen(paths.vault, decoded, key, slot);
+}
+
+export function openWithCustody(home: string, adapter: CustodyAdapter): OpenVault {
+  const paths = vaultPaths(home);
+  const decoded = decodeVault(readFileSync(paths.vault));
+  const slot = decoded.header.slots.find((item) => item.type === adapter.id);
+  if (!slot) throw new VaultError(`vault has no ${adapter.id} slot`);
+  if (!slot.account) throw new VaultError("custody slot has no account");
+  const key = adapter.get(slot.account);
+  if (key.length !== MASTER_KEY_BYTES) {
+    throw new VaultError("custody key is not the expected size");
   }
   return finishOpen(paths.vault, decoded, key, slot);
 }
@@ -239,16 +284,22 @@ export function savePayload(open: OpenVault, payload: VaultPayload): OpenVault {
   const revision = open.header.revision + 1;
   const header: VaultHeader = { ...open.header, revision };
   const nextPayload: VaultPayload = { ...payload, revision };
+  writeSealed(open.masterKey, open.vaultPath, header, nextPayload);
+  return { ...open, header, payload: nextPayload };
+}
+
+function writeSealed(
+  masterKey: Buffer,
+  vaultPath: string,
+  header: VaultHeader,
+  payload: VaultPayload,
+): void {
   const sealed = seal(
-    open.masterKey,
-    Buffer.from(canonicalJson(nextPayload), "utf8"),
+    masterKey,
+    Buffer.from(canonicalJson(payload), "utf8"),
     headerAad(header),
   );
-  writeAtomic(
-    open.vaultPath,
-    encodeVault(header, sealed.nonce, sealed.ciphertext, sealed.tag),
-  );
-  return { ...open, header, payload: nextPayload };
+  writeAtomic(vaultPath, encodeVault(header, sealed.nonce, sealed.ciphertext, sealed.tag));
 }
 
 export function backupVault(home: string, now = new Date()): string {
@@ -259,6 +310,100 @@ export function backupVault(home: string, now = new Date()): string {
   const target = join(paths.backups, `vault-r${decoded.header.revision}-${stamp}.charade`);
   writeAtomic(target, readFileSync(paths.vault));
   return target;
+}
+
+export interface RecoveryKitResult {
+  readonly kitPath: string;
+  readonly recoveryKey: string;
+  readonly vaultId: string;
+  readonly revision: number;
+}
+
+/**
+ * Replace the recovery slot with a fresh key and write the kit. The kit is
+ * written before the vault so a failed vault write never leaves a key that
+ * exists only in memory. An existing kit is never overwritten.
+ */
+export function rekeyRecovery(
+  home: string,
+  passphrase: string,
+  kitPath: string,
+  now = new Date(),
+): RecoveryKitResult {
+  if (existsSync(kitPath)) {
+    throw new VaultError("refusing to overwrite an existing recovery kit");
+  }
+  const open = openVault(home, passphrase);
+  const createdAt = now.toISOString();
+  const recoveryKey = randomKey();
+  const slotId = `s_${randomBytes(6).toString("hex")}`;
+  const box = seal(recoveryKey, open.masterKey, slotAad(slotId, "recovery"));
+  const revision = open.header.revision + 1;
+  const header: VaultHeader = {
+    ...open.header,
+    revision,
+    slots: [
+      ...open.header.slots.filter((slot) => slot.type !== "recovery"),
+      {
+        slotId,
+        type: "recovery",
+        createdAt,
+        wrap: {
+          nonce: box.nonce.toString("base64url"),
+          ciphertext: box.ciphertext.toString("base64url"),
+          tag: box.tag.toString("base64url"),
+        },
+      },
+    ],
+  };
+  const payload: VaultPayload = { ...open.payload, revision };
+  const kit = {
+    schema: "charade.recovery-kit/1",
+    vaultId: open.header.vaultId,
+    revision,
+    createdAt,
+    recoveryKey: recoveryKey.toString("base64url"),
+    note: "This key opens the vault if the passphrase and OS custody are both unavailable. Store it separately.",
+  };
+  writeAtomic(kitPath, Buffer.from(canonicalJson(kit), "utf8"), 0o600);
+  try {
+    writeSealed(open.masterKey, open.vaultPath, header, payload);
+  } catch (error) {
+    try {
+      unlinkSync(kitPath);
+    } catch {
+      // The kit may already be gone.
+    }
+    throw error;
+  }
+  return {
+    kitPath,
+    recoveryKey: recoveryKey.toString("base64url"),
+    vaultId: open.header.vaultId,
+    revision,
+  };
+}
+
+export function readRecoveryKit(kitPath: string): string {
+  let kit: unknown;
+  try {
+    kit = JSON.parse(readFileSync(kitPath, "utf8"));
+  } catch {
+    throw new VaultError("recovery kit is not valid JSON");
+  }
+  if (
+    typeof kit !== "object" ||
+    kit === null ||
+    (kit as { schema?: unknown }).schema !== "charade.recovery-kit/1" ||
+    typeof (kit as { recoveryKey?: unknown }).recoveryKey !== "string"
+  ) {
+    throw new VaultError("recovery kit does not match the expected schema");
+  }
+  const key = (kit as { recoveryKey: string }).recoveryKey;
+  if (Buffer.from(key, "base64url").length !== MASTER_KEY_BYTES) {
+    throw new VaultError("recovery kit key is not the expected size");
+  }
+  return key;
 }
 
 export interface DrillResult {

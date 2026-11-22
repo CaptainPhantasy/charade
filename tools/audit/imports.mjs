@@ -11,7 +11,14 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const failures = [];
 
 const CORE = new Set(["node:crypto", "node:buffer"]);
-const VAULT = new Set(["node:fs", "node:path", "node:crypto", "node:child_process", "node:buffer"]);
+const VAULT = new Set([
+  "node:fs",
+  "node:path",
+  "node:crypto",
+  "node:child_process",
+  "node:os",
+  "node:buffer",
+]);
 const KEYRING = new Set(["node:fs", "node:path", "node:crypto", "node:os", "node:buffer"]);
 const ENSURE = new Set(["node:fs", "node:path", "node:http", "node:net"]);
 const BROKER = new Set([

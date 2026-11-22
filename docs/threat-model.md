@@ -70,7 +70,7 @@
 |---|---|
 | Same-user read of the vault or custody item | Passphrase-first defaults; dedicated broker user; auto-unlock is an explicit owner choice with a warning |
 | Linux Secret Service absent | `secret-tool` is required for that adapter; the exact package command is printed; passphrase fallback is explicit |
-| macOS Keychain prompt automation | `security add-generic-password -w` as the last argument under a PTY; verified in Step 2 |
+| macOS Keychain prompt automation | `expect` answers the `security` prompt from a 0600 temp file; the key is never in argv. Live set/get/delete was verified in Step 2. |
 | Env exception pressure during migration | Single use, 300-second maximum, local socket only, receipted, counted on the dashboard |
 | In-flight request during revocation | Bounded by the connector timeout and receipted; new requests stop immediately |
 | Receipt durability vs latency | Two-phase receipts and group commit; integrity is reported, never assumed |

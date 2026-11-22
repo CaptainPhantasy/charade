@@ -15,13 +15,38 @@ import {
   drillBackup,
   initVault,
   openVault,
+  openWithCustody,
   openWithRecovery,
+  readRecoveryKit,
+  rekeyRecovery,
   savePayload,
   vaultFileMode,
   vaultPaths,
   type OpenVault,
 } from "../src/vault/vault.js";
 import { acquireLock } from "../src/vault/atomic.js";
+import type { CustodyAdapter } from "../src/vault/custody.js";
+
+class MemoryCustody implements CustodyAdapter {
+  readonly id = "macos-keychain" as const;
+  readonly service = "test.service";
+  private readonly values = new Map<string, Buffer>();
+
+  available(): { ok: boolean } {
+    return { ok: true };
+  }
+  set(account: string, secret: Buffer): void {
+    this.values.set(account, Buffer.from(secret));
+  }
+  get(account: string): Buffer {
+    const value = this.values.get(account);
+    if (!value) throw new Error("missing custody item");
+    return Buffer.from(value);
+  }
+  delete(account: string): void {
+    this.values.delete(account);
+  }
+}
 
 const PASSPHRASE = "correct horse battery staple";
 
@@ -120,6 +145,41 @@ describe("vault", () => {
     }
     const again = acquireLock(home);
     again.release();
+  });
+
+  it("adds a custody slot and opens through it", () => {
+    const custodyHome = mkdtempSync(join(tmpdir(), "charade-vault-custody-"));
+    const adapter = new MemoryCustody();
+    try {
+      initVault({ home: custodyHome, passphrase: PASSPHRASE, custodyAdapter: adapter });
+      const viaCustody = openWithCustody(custodyHome, adapter);
+      assert.equal(viaCustody.header.slots.length, 3);
+      assert.equal(viaCustody.header.slots.some((slot) => slot.type === "macos-keychain"), true);
+      assert.equal(openVault(custodyHome, PASSPHRASE).header.vaultId, viaCustody.header.vaultId);
+      const account = viaCustody.header.slots.find((slot) => slot.type === "macos-keychain")?.account;
+      assert.ok(account);
+      adapter.delete(account);
+      assert.throws(() => openWithCustody(custodyHome, adapter));
+    } finally {
+      rmSync(custodyHome, { recursive: true, force: true });
+    }
+  });
+
+  it("rekeys recovery, writes a 0600 kit, and drills the right backup", () => {
+    const oldKey = recoveryKey;
+    const backupBefore = backupVault(home);
+    const kit = join(home, "recovery-kit.json");
+    const rekeyed = rekeyRecovery(home, PASSPHRASE, kit);
+    assert.equal(rekeyed.revision, 2);
+    assert.equal(readRecoveryKit(kit), rekeyed.recoveryKey);
+    assert.equal(statSync(kit).mode & 0o777, 0o600);
+    assert.equal(openWithRecovery(home, rekeyed.recoveryKey).header.vaultId, opened.header.vaultId);
+    assert.throws(() => openWithRecovery(home, oldKey));
+    assert.equal(drillBackup(backupBefore, oldKey).revision, 1);
+    assert.throws(() => drillBackup(backupBefore, rekeyed.recoveryKey));
+    const backupAfter = backupVault(home);
+    assert.equal(drillBackup(backupAfter, rekeyed.recoveryKey).revision, 2);
+    assert.throws(() => rekeyRecovery(home, PASSPHRASE, kit));
   });
 
   it("recovers a lock whose recorded process is gone", () => {
