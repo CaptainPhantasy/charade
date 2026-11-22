@@ -1,0 +1,27 @@
+{
+  "name": "charade-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CHARADE — an open-source, telemetry-free secret platform.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "npm run build && node --test packages/charade/dist/test/*.test.js packages/charade-ensure/dist/test/*.test.js",
+    "check:imports": "node tools/audit/imports.mjs",
+    "check:telemetry": "node tools/audit/no-telemetry.mjs",
+    "check:license": "node tools/audit/license.mjs",
+    "check": "npm run check:license && npm run check:imports && npm run check:telemetry && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.9.3"
+  }
+}

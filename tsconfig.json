@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/charade" },
+    { "path": "packages/charade-ensure" },
+    { "path": "packages/charade-tui" }
+  ]
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.tmp/
+.work/
+coverage/
+*.log
+*.tgz
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Charade runtime state must never be committed.
+.charade/
+*.charade
+*.charade.prev
+*.charade.bak
+state/
