@@ -32,6 +32,8 @@ const BROKER = new Set([
   "node:path",
   "node:crypto",
   "node:stream",
+  "node:stream/promises",
+  "node:stream/web",
   "node:events",
   "node:url",
   "node:buffer",

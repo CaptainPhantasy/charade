@@ -24,6 +24,7 @@ import {
   headerAad,
   type VaultHeader,
   type VaultPayload,
+  type VaultSecret,
   type VaultSlot,
 } from "./format.js";
 import { acquireLock, writeAtomic } from "./atomic.js";
@@ -349,6 +350,74 @@ function writeSealed(
     headerAad(header),
   );
   writeAtomic(vaultPath, encodeVault(header, sealed.nonce, sealed.ciphertext, sealed.tag));
+}
+
+export interface PutSecretInput {
+  readonly serviceId: string;
+  readonly value: string;
+  readonly label?: string;
+  readonly now?: Date;
+}
+
+export function putSecret(open: OpenVault, input: PutSecretInput): OpenVault {
+  const createdAt = (input.now ?? new Date()).toISOString();
+  const secret: VaultSecret = {
+    id: `sec_${randomBytes(8).toString("hex")}`,
+    serviceId: input.serviceId,
+    ...(input.label ? { label: input.label } : {}),
+    value: input.value,
+    versionId: `ver_${randomBytes(8).toString("hex")}`,
+    status: "active",
+    createdAt,
+  };
+  return savePayload(open, { ...open.payload, secrets: [...open.payload.secrets, secret] });
+}
+
+/**
+ * New leases pin the new version; the old version remains usable until the
+ * overlap deadline so an in-flight consumer can finish.
+ */
+export function rotateSecret(
+  open: OpenVault,
+  secretId: string,
+  newValue: string,
+  overlapSeconds = 900,
+  now = new Date(),
+): OpenVault {
+  if (!Number.isInteger(overlapSeconds) || overlapSeconds <= 0) {
+    throw new VaultError("rotation overlap must be a positive integer");
+  }
+  const active = open.payload.secrets.find(
+    (secret) => secret.id === secretId && secret.status === "active",
+  );
+  if (!active) throw new VaultError("secret has no active version");
+  const previousValidUntil = new Date(now.getTime() + overlapSeconds * 1000).toISOString();
+  const createdAt = now.toISOString();
+  const previous = open.payload.secrets.map((secret) =>
+    secret.id === secretId && secret.status === "active"
+      ? { ...secret, status: "previous" as const, previousValidUntil }
+      : secret,
+  );
+  const fresh: VaultSecret = {
+    id: active.id,
+    serviceId: active.serviceId,
+    ...(active.label ? { label: active.label } : {}),
+    value: newValue,
+    versionId: `ver_${randomBytes(8).toString("hex")}`,
+    status: "active",
+    createdAt,
+  };
+  return savePayload(open, { ...open.payload, secrets: [...previous, fresh] });
+}
+
+export function findSecretVersion(open: OpenVault, versionId: string): VaultSecret | undefined {
+  return open.payload.secrets.find((secret) => secret.versionId === versionId);
+}
+
+export function findActiveSecret(open: OpenVault, serviceId: string): VaultSecret | undefined {
+  return open.payload.secrets.find(
+    (secret) => secret.serviceId === serviceId && secret.status === "active",
+  );
 }
 
 export function backupVault(home: string, now = new Date()): string {

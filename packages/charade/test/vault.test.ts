@@ -13,13 +13,17 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   backupVault,
   drillBackup,
+  findActiveSecret,
+  findSecretVersion,
   getOwnerKeyPair,
   initVault,
   openVault,
   openWithCustody,
   openWithRecovery,
+  putSecret,
   readRecoveryKit,
   rekeyRecovery,
+  rotateSecret,
   savePayload,
   vaultFileMode,
   vaultPaths,
@@ -128,12 +132,37 @@ describe("vault", () => {
   it("increments the revision and persists a payload", () => {
     const next = savePayload(opened, {
       ...opened.payload,
-      secrets: [{ label: "fixture" }],
+      secrets: [
+        {
+          id: "sec_fixture",
+          serviceId: "svc",
+          value: "fixture",
+          versionId: "ver_fixture",
+          status: "active",
+          createdAt: new Date().toISOString(),
+        },
+      ],
     });
     assert.equal(next.header.revision, 2);
     const reopened = openVault(home, PASSPHRASE);
     assert.equal(reopened.header.revision, 2);
     assert.equal(reopened.payload.secrets.length, 1);
+  });
+
+  it("stores and rotates versioned secrets with an overlap window", () => {
+    const now = new Date("2026-01-01T00:00:00Z");
+    let current = putSecret(opened, { serviceId: "svc", value: "v1", now });
+    const first = findActiveSecret(current, "svc");
+    assert.ok(first);
+    assert.equal(first.value, "v1");
+    current = rotateSecret(current, first.id, "v2", 900, now);
+    const active = findActiveSecret(current, "svc");
+    assert.equal(active?.value, "v2");
+    const previous = findSecretVersion(current, first.versionId);
+    assert.equal(previous?.status, "previous");
+    assert.equal(previous?.previousValidUntil, "2026-01-01T00:15:00.000Z");
+    const reopened = openVault(home, PASSPHRASE);
+    assert.equal(findActiveSecret(reopened, "svc")?.value, "v2");
   });
 
   it("backs up and drills a backup without touching the live vault", () => {

@@ -26,8 +26,12 @@ function walk(dir) {
   }
   for (const entry of entries) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else out.push(full);
+    if (entry.isDirectory()) {
+      if (entry.name === "dist" || entry.name === "node_modules") continue;
+      out.push(...walk(full));
+    } else {
+      out.push(full);
+    }
   }
   return out;
 }

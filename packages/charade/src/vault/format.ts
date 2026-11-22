@@ -53,6 +53,17 @@ export interface OwnerRecord {
   readonly createdAt: string;
 }
 
+export interface VaultSecret {
+  readonly id: string;
+  readonly serviceId: string;
+  readonly label?: string;
+  readonly value: string;
+  readonly versionId: string;
+  readonly status: "active" | "previous";
+  readonly createdAt: string;
+  readonly previousValidUntil?: string;
+}
+
 export interface VaultPayload {
   readonly schema: "charade.vault-payload/1";
   readonly vaultId: string;
@@ -60,7 +71,7 @@ export interface VaultPayload {
   readonly createdAt: string;
   readonly canary: string;
   readonly owner?: OwnerRecord;
-  readonly secrets: readonly unknown[];
+  readonly secrets: readonly VaultSecret[];
 }
 
 export interface DecodedVault {

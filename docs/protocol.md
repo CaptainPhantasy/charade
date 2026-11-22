@@ -224,6 +224,11 @@ immediately cannot be smoothed over; the TUI says so before approval.
 
 ### 5.2 Consumer session
 
+A consumer or owner request authenticates with
+`Authorization: Bearer <session token>`. A proxy request carries its short lease in
+`X-Charade-Lease`; the proxy strips both headers before contacting the upstream.
+The session is short-lived and idle-limited; the lease is shorter and renewable.
+
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/session` | Exchange a signed challenge for a session token |
@@ -242,6 +247,7 @@ immediately cannot be smoothed over; the TUI says so before approval.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/admin/consumers` | Create a consumer and one-time enrollment token |
+| POST | `/v1/admin/credentials/rotate` | Rotate a service credential with an overlap window; owner session |
 | GET/DELETE | `/v1/admin/consumers/:id` | List/revoke |
 | POST | `/v1/admin/devices/:id/revoke` | Revoke a device |
 | POST/GET | `/v1/admin/grants` | Create/list owner-signed grants |

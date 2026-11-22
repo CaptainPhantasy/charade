@@ -16,8 +16,11 @@ export type ErrorCode =
   | "charade.lease_revoked"
   | "charade.device_mismatch"
   | "charade.device_revoked"
+  | "charade.session_invalid"
   | "charade.action_denied"
   | "charade.action_unknown"
+  | "charade.ceiling_reached"
+  | "charade.secret_missing"
   | "charade.env_not_granted"
   | "charade.protocol_mismatch"
   | "charade.integrity_broken"
@@ -110,6 +113,24 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, ErrorDefinition>> = {
   "charade.device_revoked": {
     whatHappened: "This device has been revoked.",
     whatNext: "Ask the owner to enroll it again if access is still intended.",
+    ownerOnly: true,
+    retriable: false,
+  },
+  "charade.session_invalid": {
+    whatHappened: "The session is missing, expired, or invalid.",
+    whatNext: "Open a new session with the enrolled device key; nothing was changed.",
+    ownerOnly: false,
+    retriable: true,
+  },
+  "charade.ceiling_reached": {
+    whatHappened: "The grant's call ceiling was reached.",
+    whatNext: "Ask the owner to raise the ceiling or wait for the next window; the request was not forwarded.",
+    ownerOnly: true,
+    retriable: false,
+  },
+  "charade.secret_missing": {
+    whatHappened: "No active secret version is available for this service.",
+    whatNext: "Ask the owner to add or rotate the service credential; the request was not forwarded.",
     ownerOnly: true,
     retriable: false,
   },
