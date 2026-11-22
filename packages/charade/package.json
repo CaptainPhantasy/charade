@@ -10,6 +10,9 @@
   },
   "main": "./dist/src/core/index.js",
   "types": "./dist/src/core/index.d.ts",
+  "bin": {
+    "charade": "./dist/src/cli/main.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/src/core/index.d.ts",
