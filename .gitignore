@@ -23,3 +23,6 @@ state/
 
 # Internal quarantine — preserved locally, never published.
 .quarantine/
+
+# Local maintenance record: host paths and evidence, outside the public surface.
+docs/Charade_SSOT.md

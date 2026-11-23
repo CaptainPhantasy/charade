@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import readline from "node:readline";
-import { PRODUCT_VERSION, protocolString } from "../core/version.js";
+import { PRODUCT_VERSION } from "../core/version.js";
+import { USAGE } from "./usage.js";
+import { brokerCommand } from "./broker.js";
+import {
+  checkPassphrase,
+  passphraseFrom,
+  takeOption,
+  UsageError,
+  usageError,
+} from "./util.js";
 import {
   backupVault,
   drillBackup,
@@ -39,26 +47,6 @@ import { publicKeyFingerprint } from "../authority/keys.js";
 import { loadRegistry } from "../registry/registry.js";
 import { ReceiptLog, verifyReceipts } from "../audit/receipts.js";
 
-const USAGE = `CHARADE ${PRODUCT_VERSION} (protocol ${protocolString()})
-
-Usage:
-  charade init --home <dir> [--passphrase-file <file>] [--custody <backend>] [--dry-run]
-  charade vault backup --home <dir>
-  charade vault recovery-kit --home <dir> --out <file> [--passphrase-file <file>]
-  charade vault drill --backup <file> --kit <file>
-  charade policy init --home <dir> [--accept-defaults] [--dry-run] [--passphrase-file <file>]
-  charade policy show --home <dir>
-  charade grant create --home <dir> --consumer <id> --services <ids> --duration <preset> [--accept]
-  charade grant list --home <dir>
-  charade grant revoke --home <dir> --id <grant> [--accept]
-  charade registry validate --home <dir>
-  charade receipts verify --home <dir>
-  charade --version
-
-Custody backends: macos-keychain, secret-service, systemd-creds.
-The default is the passphrase slot plus a recovery key. The passphrase is never
-accepted from an environment variable; use a file with mode 0600 or the prompt.
-`;
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -81,6 +69,10 @@ async function main(): Promise<void> {
   }
   if (command === "policy") {
     await policyCommand(args);
+    return;
+  }
+  if (command === "broker") {
+    await brokerCommand(args);
     return;
   }
   if (command === "grant") {
@@ -420,80 +412,6 @@ function resolveCustody(name: string, requireAvailable = true): CustodyAdapter {
     );
   }
   return adapter;
-}
-
-async function passphraseFrom(args: string[], file: string | undefined): Promise<string> {
-  return file ? readPassphraseFile(file) : readPassphrase();
-}
-
-function checkPassphrase(passphrase: string): void {
-  if (passphrase.length < 12) {
-    throw new VaultError("passphrase must be at least 12 characters");
-  }
-}
-
-class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "UsageError";
-  }
-}
-
-function usageError(message: string): never {
-  process.stderr.write(`${message}\n\n${USAGE}`);
-  throw new UsageError(message);
-}
-
-function readPassphraseFile(file: string): string {
-  const info = statSync(file);
-  if ((info.mode & 0o077) !== 0) {
-    throw new VaultError("passphrase file must not be readable by group or others");
-  }
-  if (info.size === 0) {
-    throw new VaultError("passphrase file is empty");
-  }
-  return readFileSync(file, "utf8").replace(/\r?\n$/, "");
-}
-
-function takeOption(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  if (index === -1) return undefined;
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) return undefined;
-  args.splice(index, 2);
-  return value;
-}
-
-async function readPassphrase(): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new VaultError(
-      "no TTY for the passphrase prompt; use --passphrase-file with mode 0600",
-    );
-  }
-  const first = await hiddenPrompt("Passphrase: ");
-  const second = await hiddenPrompt("Passphrase again: ");
-  if (first !== second) {
-    throw new VaultError("passphrases do not match");
-  }
-  return first;
-}
-
-function hiddenPrompt(label: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: true,
-    });
-    const mutable = rl as unknown as { _writeToOutput?: (text: string) => void };
-    mutable._writeToOutput = () => undefined;
-    process.stdout.write(label);
-    rl.question("", (answer) => {
-      rl.close();
-      process.stdout.write("\n");
-      resolve(answer);
-    });
-  });
 }
 
 void main().catch((error: unknown) => {

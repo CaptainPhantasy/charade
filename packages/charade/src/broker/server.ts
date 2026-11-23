@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import {
   createServer,
+  request as httpRequest,
   type IncomingMessage,
   type Server,
   type ServerResponse,
@@ -82,7 +83,15 @@ export class Broker {
     const directory = dirname(this.socketPath);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
-    if (existsSync(this.socketPath)) unlinkSync(this.socketPath);
+    if (existsSync(this.socketPath)) {
+      if (await socketIsLive(this.socketPath)) {
+        throw new Error(
+          `another broker is already listening on ${this.socketPath}; ` +
+            "stop it or pass a different --socket",
+        );
+      }
+      unlinkSync(this.socketPath);
+    }
 
     this.server = createServer((request, response) => {
       void this.handle(request, response);
@@ -605,6 +614,28 @@ export class Broker {
       requestId,
     }, requestId);
   }
+}
+
+/**
+ * A socket file can outlive the process that owned it. Only an answering
+ * broker counts as live; a refused connection is a stale socket to replace.
+ */
+function socketIsLive(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = httpRequest(
+      { socketPath, method: "GET", path: "/health", timeout: 500 },
+      (response) => {
+        response.resume();
+        response.on("end", () => resolve(true));
+      },
+    );
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+    request.end();
+  });
 }
 
 function bearer(request: IncomingMessage): string | undefined {
