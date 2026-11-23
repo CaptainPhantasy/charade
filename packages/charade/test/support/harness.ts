@@ -1,5 +1,11 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createServer, request as httpRequest, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +17,7 @@ import { addGrant, createPolicy, loadPolicy } from "../../src/authority/store.js
 import { signGrant } from "../../src/authority/grants.js";
 import { initVault, openVault, putSecret } from "../../src/vault/vault.js";
 import { saveRegistry, type Registry } from "../../src/registry/registry.js";
+import { Broker } from "../../src/broker/server.js";
 
 export const CLI = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
 export const PASSPHRASE = "correct horse battery staple";
@@ -31,6 +38,9 @@ export interface HarnessOptions {
   readonly withGrant?: boolean;
   readonly grantMethods?: readonly string[];
   readonly grantPaths?: readonly string[];
+  readonly callsPerDay?: number;
+  /** Replace the default echo upstream; the registry always points at it. */
+  readonly upstreamHandler?: (request: IncomingMessage, response: ServerResponse) => void;
 }
 
 export interface Harness {
@@ -55,7 +65,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const home = mkdtempSync(join(tmpdir(), "charade-harness-"));
   const captures: Capture[] = [];
 
-  const upstream = createServer((request, response) => {
+  const defaultHandler = (request: IncomingMessage, response: ServerResponse): void => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
@@ -65,6 +75,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ url: request.url, method: request.method, body }));
     });
+  };
+  const upstream = createServer((request, response) => {
+    (options.upstreamHandler ?? defaultHandler)(request, response);
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const upstreamPort = (upstream.address() as AddressInfo).port;
@@ -122,7 +135,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         methods: options.grantMethods ?? ["GET", "POST"],
         paths: options.grantPaths ?? ["/v1/*"],
         durationSeconds: 86_400,
-        ceilings: { callsPerDay: 1_000 },
+        ceilings: { callsPerDay: options.callsPerDay ?? 1_000 },
         hardStops: { ...DEFAULT_GATES.hardStops },
         envAllowed: false,
       }),
@@ -268,4 +281,19 @@ export async function stopBroker(broker: BrokerProcess): Promise<void> {
   const exited = new Promise<void>((resolve) => broker.child.on("exit", () => resolve()));
   broker.child.kill("SIGTERM");
   await exited;
+}
+
+/** Start the broker in this process so a test can inject a clock. */
+export async function startInProcessBroker(
+  harness: Harness,
+  options: { now?: () => Date } = {},
+): Promise<Broker> {
+  const broker = new Broker({
+    home: harness.home,
+    passphrase: PASSPHRASE,
+    socketPath: harness.socket,
+    ...(options.now ? { now: options.now } : {}),
+  });
+  await broker.start();
+  return broker;
 }

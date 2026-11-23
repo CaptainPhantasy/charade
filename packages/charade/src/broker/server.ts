@@ -32,8 +32,9 @@ import {
 } from "../vault/vault.js";
 import { SessionError, SessionStore, type Session } from "./session.js";
 import { brokerHealth, brokerReady } from "./health.js";
-import { classifyAction, pathAllowed } from "./connectors.js";
-import { forwardProxy, ProxyError } from "./proxy/forward.js";
+import { authSupported, classifyAction, pathAllowed } from "./connectors.js";
+import { CallCounters } from "./counters.js";
+import { forwardProxy, LeakDetectedError, ProxyError } from "./proxy/forward.js";
 
 const MAX_BODY = 1024 * 1024;
 
@@ -50,7 +51,7 @@ export class Broker {
   private readonly passphrase: string;
   private readonly now: () => Date;
   private readonly sessions = new SessionStore();
-  private readonly counters = new Map<string, { day: string; count: number }>();
+  private counters?: CallCounters;
   private open?: OpenVault;
   private policy?: ReturnType<typeof loadPolicy>;
   private policyError?: string;
@@ -73,6 +74,7 @@ export class Broker {
   async start(): Promise<this> {
     this.open = openVault(this.home, this.passphrase);
     this.leases = new LeaseStore(join(this.home, "leases.json"));
+    this.counters = new CallCounters(join(this.home, "counters.json"), this.now);
     try {
       this.receipts = new ReceiptLog(join(this.home, "receipts.jsonl"));
     } catch {
@@ -99,7 +101,7 @@ export class Broker {
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
         this.server?.off("listening", onListening);
-        reject(error);
+        reject(explainListenError(error, this.socketPath));
       };
       const onListening = (): void => {
         this.server?.off("error", onError);
@@ -483,6 +485,11 @@ export class Broker {
       throw new CharadeError("charade.scope_denied", requestId);
     }
 
+    if (!authSupported(service)) {
+      // Never accept a service whose connector this build cannot inject.
+      throw new CharadeError("charade.registry_invalid", requestId);
+    }
+
     const decision = classifyAction(service, method, remainingPath);
     const actor = consumerActor(session);
     if (decision.class === "unknown") {
@@ -516,35 +523,45 @@ export class Broker {
     response.setHeader("x-charade-protocol", protocolString());
     response.setHeader("x-charade-request-id", requestId);
     response.setHeader("cache-control", "no-store");
+    const controller = new AbortController();
+    const abortOnDisconnect = (): void => {
+      if (!response.writableEnded) controller.abort();
+    };
+    response.on("close", abortOnDisconnect);
     try {
       const result = await forwardProxy(response, {
         service,
         secretValue: secret.value,
-        method: request.method ?? "GET",
+        method,
         remainingPath,
         search: url.search,
         headers: request.headers,
         body,
+        signal: controller.signal,
       });
       this.receipt(actor, "proxy.complete", service.id, "ok", requestId);
       void result;
     } catch (error) {
+      if (error instanceof LeakDetectedError) {
+        this.receipt(actor, "proxy.leak_blocked", service.id, "denied", requestId);
+        if (!response.headersSent) throw new CharadeError("charade.integrity_broken", requestId);
+        response.destroy();
+        return;
+      }
       this.receipt(actor, "proxy.failed", service.id, "failed", requestId);
       throw error;
+    } finally {
+      response.off("close", abortOnDisconnect);
     }
   }
 
   private admitCall(grant: Grant): boolean {
-    const day = this.now().toISOString().slice(0, 10);
-    const key = grant.grantId;
-    const current = this.counters.get(key);
-    if (!current || current.day !== day) {
-      this.counters.set(key, { day, count: 1 });
-      return true;
+    try {
+      return (this.counters as CallCounters).admit(grant.grantId, grant.ceilings.callsPerDay);
+    } catch {
+      // A counter we cannot read is not a fresh day; refuse rather than overrun.
+      throw new CharadeError("charade.integrity_broken");
     }
-    if (current.count >= grant.ceilings.callsPerDay) return false;
-    current.count += 1;
-    return true;
   }
 
   private requireOperational(requestId: string): void {
@@ -644,6 +661,24 @@ function socketIsLive(socketPath: string): Promise<boolean> {
     request.on("error", () => resolve(false));
     request.end();
   });
+}
+
+/**
+ * A Unix socket path that exceeds the platform limit fails with an errno that
+ * says nothing useful. Say what to do instead.
+ */
+function explainListenError(error: Error, socketPath: string): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ENAMETOOLONG") {
+    return new Error(
+      `socket path is too long for this platform (${socketPath.length} characters); ` +
+        "pass a shorter --socket or set CHARADE_SOCKET_DIR",
+    );
+  }
+  if (code === "EADDRINUSE") {
+    return new Error(`socket path is already in use: ${socketPath}`);
+  }
+  return error;
 }
 
 function bearer(request: IncomingMessage): string | undefined {

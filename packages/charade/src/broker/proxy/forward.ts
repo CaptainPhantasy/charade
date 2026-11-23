@@ -1,4 +1,4 @@
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { IncomingHttpHeaders, ServerResponse } from "node:http";
 import type { ServiceRecord } from "../../registry/registry.js";
@@ -23,6 +23,14 @@ export class ProxyError extends Error {
   }
 }
 
+/** The upstream response contained the injected credential. */
+export class LeakDetectedError extends Error {
+  constructor() {
+    super("upstream response contained the injected credential");
+    this.name = "LeakDetectedError";
+  }
+}
+
 export interface ForwardInput {
   readonly service: ServiceRecord;
   readonly secretValue: string;
@@ -31,6 +39,8 @@ export interface ForwardInput {
   readonly search: string;
   readonly headers: IncomingHttpHeaders;
   readonly body: Buffer;
+  /** Aborted when the consumer disconnects, so the upstream call stops too. */
+  readonly signal?: AbortSignal;
 }
 
 export interface ForwardResult {
@@ -47,6 +57,14 @@ export async function forwardProxy(
     if (value === undefined) continue;
     headers[key] = Array.isArray(value) ? value.join(", ") : value;
   }
+  // A Connection header can name extra hop-by-hop fields to drop (RFC 9110).
+  const connection = headers.connection;
+  if (connection) {
+    for (const token of connection.split(",")) {
+      const name = token.trim().toLowerCase();
+      if (name.length > 0) delete headers[name];
+    }
+  }
   for (const key of HOP_BY_HOP) delete headers[key];
   delete headers.authorization;
   delete headers["x-charade-session"];
@@ -61,7 +79,9 @@ export async function forwardProxy(
     method: input.method,
     headers: injected.headers,
     redirect: "manual",
-    signal: AbortSignal.timeout(30_000),
+    signal: input.signal
+      ? AbortSignal.any([AbortSignal.timeout(30_000), input.signal])
+      : AbortSignal.timeout(30_000),
   };
   if (input.method !== "GET" && input.method !== "HEAD") init.body = input.body;
 
@@ -79,14 +99,37 @@ export async function forwardProxy(
   }
   response.writeHead(upstream.status, responseHeaders);
   if (upstream.body) {
-    await pipeline(
-      Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream<Uint8Array>),
-      response,
+    const source = Readable.fromWeb(
+      upstream.body as import("node:stream/web").ReadableStream<Uint8Array>,
     );
+    await pipeline(source, leakGuard(input.secretValue), response);
   } else {
     response.end();
   }
   return { status: upstream.status };
+}
+
+/**
+ * The value must never reach the consumer, even if an upstream echoes it back
+ * (a misconfigured service, a debug endpoint, a proxy in the middle). The guard
+ * keeps only a rolling tail, so streaming behaviour and memory use are intact.
+ */
+function leakGuard(secret: string): Transform {
+  const needle = Buffer.from(secret, "utf8");
+  const keep = Math.max(0, needle.length - 1);
+  let tail = Buffer.alloc(0);
+  if (needle.length === 0) return new Transform({ transform: (chunk, _encoding, callback) => callback(null, chunk) });
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const window = Buffer.concat([tail, chunk]);
+      if (window.includes(needle)) {
+        callback(new LeakDetectedError());
+        return;
+      }
+      tail = window.subarray(Math.max(0, window.length - keep));
+      callback(null, chunk);
+    },
+  });
 }
 
 function buildTarget(service: ServiceRecord, remainingPath: string, search: string): URL {
