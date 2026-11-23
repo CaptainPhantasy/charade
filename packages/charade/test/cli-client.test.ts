@@ -116,10 +116,10 @@ describe("consumer client", () => {
     await client.openSession();
     const issued = await client.issueLease([SERVICE_ID]);
     await assert.rejects(
-      client.call({ leaseToken: issued.token, service: SERVICE_ID, path: "/admin/secret" }),
+      client.call({ leaseToken: issued.token, service: SERVICE_ID, path: "/v2/not-declared" }),
       (error: unknown) => {
         const typed = error as { code?: string; body?: { whatNext?: string } };
-        assert.equal(typed.code, "charade.action_unknown");
+        assert.equal(typed.code, "charade.scope_denied");
         assert.ok(typed.body?.whatNext);
         return true;
       },
@@ -166,7 +166,7 @@ describe("charade call (CLI)", () => {
       harness.deviceFile,
     ]);
     assert.equal(denied.status, 1);
-    assert.match(denied.stderr, /charade\.action_unknown/);
+    assert.match(denied.stderr, /charade\.scope_denied/);
     assert.match(denied.stderr, /what next:/);
   });
 

@@ -116,7 +116,7 @@ async function fixture(options: { hardStopSend?: boolean; omitRegistry?: boolean
       consumerId: "c1",
       deviceId: "d1",
       services: ["svc"],
-      methods: ["GET", "POST"],
+      methods: ["GET", "POST", "PATCH"],
       paths: ["/v1/*", "/send"],
       durationSeconds: 86_400,
       ceilings: { callsPerDay: 100 },
@@ -319,7 +319,8 @@ describe("broker", () => {
     const leaseToken = lease.json.token as string;
     const headers = { ...auth, "x-charade-lease": leaseToken, "content-length": "0" };
 
-    const unknown = await call(f.broker.socketPath, "GET", "/v1/proxy/svc/unknown", headers);
+    // PATCH is inside the grant (method and path) but outside the service action table.
+    const unknown = await call(f.broker.socketPath, "PATCH", "/v1/proxy/svc/v1/echo", headers);
     assert.equal(unknown.status, 403);
     assert.match(unknown.body.toString(), /action_unknown/);
 
