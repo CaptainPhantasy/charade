@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { PRODUCT_VERSION } from "../core/version.js";
 import { USAGE } from "./usage.js";
 import { brokerCommand } from "./broker.js";
+import { secretCommand } from "./secret.js";
 import {
   checkPassphrase,
   passphraseFrom,
@@ -73,6 +74,10 @@ async function main(): Promise<void> {
   }
   if (command === "broker") {
     await brokerCommand(args);
+    return;
+  }
+  if (command === "secret") {
+    await secretCommand(args);
     return;
   }
   if (command === "grant") {

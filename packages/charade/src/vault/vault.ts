@@ -410,6 +410,18 @@ export function rotateSecret(
   return savePayload(open, { ...open.payload, secrets: [...previous, fresh] });
 }
 
+/**
+ * Remove every version of one secret. Leases that pinned a version of it are
+ * refused afterwards, because the value they reference no longer exists.
+ */
+export function removeSecret(open: OpenVault, secretId: string): OpenVault {
+  const remaining = open.payload.secrets.filter((secret) => secret.id !== secretId);
+  if (remaining.length === open.payload.secrets.length) {
+    throw new VaultError("secret was not found");
+  }
+  return savePayload(open, { ...open.payload, secrets: remaining });
+}
+
 export function findSecretVersion(open: OpenVault, versionId: string): VaultSecret | undefined {
   return open.payload.secrets.find((secret) => secret.versionId === versionId);
 }
