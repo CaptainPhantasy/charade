@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { canonicalJson } from "../core/canonical-json.js";
 import { writeAtomic } from "../vault/atomic.js";
 
@@ -94,6 +94,40 @@ export function saveRegistry(path: string, registry: Registry): Registry {
   validateRegistry(next, { allowEmpty: true });
   writeAtomic(path, Buffer.from(canonicalJson(next), "utf8"), 0o600);
   return next;
+}
+
+/**
+ * A registry is created on first use. An empty file still has to be readable,
+ * so a malformed registry is never silently replaced by a fresh one.
+ */
+export function loadRegistryForEdit(path: string): Registry {
+  if (!existsSync(path)) return emptyRegistry();
+  return loadRegistry(path, { allowEmpty: true });
+}
+
+export function addService(path: string, service: ServiceRecord): Registry {
+  const registry = loadRegistryForEdit(path);
+  return saveRegistry(path, { ...registry, services: [...registry.services, service] });
+}
+
+export function addConsumer(path: string, consumer: ConsumerRecord): Registry {
+  const registry = loadRegistryForEdit(path);
+  return saveRegistry(path, { ...registry, consumers: [...registry.consumers, consumer] });
+}
+
+/** Adding a device also records it on its consumer, in both directions. */
+export function addDevice(path: string, device: DeviceRecord): Registry {
+  const registry = loadRegistryForEdit(path);
+  const consumers = registry.consumers.map((consumer) =>
+    consumer.id === device.consumerId
+      ? { ...consumer, deviceIds: [...consumer.deviceIds, device.id] }
+      : consumer,
+  );
+  return saveRegistry(path, {
+    ...registry,
+    consumers,
+    devices: [...registry.devices, device],
+  });
 }
 
 export function emptyRegistry(): Registry {

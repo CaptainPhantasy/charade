@@ -6,6 +6,7 @@ import { PRODUCT_VERSION } from "../core/version.js";
 import { USAGE } from "./usage.js";
 import { brokerCommand } from "./broker.js";
 import { secretCommand } from "./secret.js";
+import { deviceCommand, registryCommand } from "./registry.js";
 import {
   checkPassphrase,
   passphraseFrom,
@@ -86,6 +87,10 @@ async function main(): Promise<void> {
   }
   if (command === "registry") {
     await registryCommand(args);
+    return;
+  }
+  if (command === "device") {
+    await deviceCommand(args);
     return;
   }
   if (command === "receipts") {
@@ -362,20 +367,6 @@ async function grantCommand(args: string[]): Promise<void> {
     return;
   }
   usageError(`unknown grant command: ${sub ?? "(none)"}`);
-}
-
-async function registryCommand(args: string[]): Promise<void> {
-  const sub = args[1];
-  const home = takeOption(args, "--home");
-  if (!home) usageError("registry: --home <dir> is required");
-  if (sub === "validate") {
-    const registry = loadRegistry(join(home, "registry.json"));
-    process.stdout.write(
-      `registry ok: ${registry.services.length} services, ${registry.consumers.length} consumers, ${registry.devices.length} devices\n`,
-    );
-    return;
-  }
-  usageError(`unknown registry command: ${sub ?? "(none)"}`);
 }
 
 async function receiptsCommand(args: string[]): Promise<void> {
