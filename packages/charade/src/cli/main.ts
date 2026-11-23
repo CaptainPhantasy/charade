@@ -293,6 +293,7 @@ async function grantCommand(args: string[]): Promise<void> {
     if (!accept) {
       process.stdout.write("Proposed grant — nothing is signed until you accept:\n\n");
       process.stdout.write(`  consumer: ${consumerId}\n`);
+      process.stdout.write(`  device:   ${deviceId ?? "(any enrolled device of the consumer)"}\n`);
       process.stdout.write(`  services: ${services.join(", ")}\n`);
       process.stdout.write(`  methods:  ${methods.join(", ")}\n`);
       process.stdout.write(`  paths:    ${paths.join(", ")}\n`);
@@ -314,6 +315,20 @@ async function grantCommand(args: string[]): Promise<void> {
     const missing = services.filter((service) => !consumer.services.includes(service));
     if (missing.length > 0) {
       throw new VaultError(`consumer ${consumerId} is not registered for: ${missing.join(", ")}`);
+    }
+    if (deviceId) {
+      const device = registry.devices.find((item) => item.id === deviceId);
+      if (!device) {
+        throw new VaultError(
+          "device " + deviceId + " is not enrolled; run `charade device enroll --consumer " + consumerId + " --id " + deviceId + " --out <file>`",
+        );
+      }
+      if (device.consumerId !== consumerId) {
+        throw new VaultError(
+          `device ${deviceId} belongs to consumer ${device.consumerId}, not ${consumerId}`,
+        );
+      }
+      if (device.revokedAt) throw new VaultError(`device ${deviceId} is revoked`);
     }
     const grant = signGrant(getOwnerKeyPair(open).privateKey, policy, {
       consumerId,
@@ -347,7 +362,11 @@ async function grantCommand(args: string[]): Promise<void> {
       return;
     }
     for (const grant of grants) {
-      process.stdout.write(`${grant.grantId}  ${grant.consumerId}  ${grant.services.join(",")}  expires ${grant.expiresAt}\n`);
+      process.stdout.write(
+        `${grant.grantId}  ${grant.consumerId}  services ${grant.services.join(",")}  ` +
+          `methods ${grant.methods.join(",")}  paths ${grant.paths.join(",")}  ` +
+          `device ${grant.deviceId ?? "-"}  expires ${grant.expiresAt}\n`,
+      );
     }
     return;
   }

@@ -32,7 +32,7 @@ import {
 } from "../vault/vault.js";
 import { SessionError, SessionStore, type Session } from "./session.js";
 import { brokerHealth, brokerReady } from "./health.js";
-import { classifyAction } from "./connectors.js";
+import { classifyAction, pathAllowed } from "./connectors.js";
 import { forwardProxy, ProxyError } from "./proxy/forward.js";
 
 const MAX_BODY = 1024 * 1024;
@@ -456,6 +456,7 @@ export class Broker {
   ): Promise<void> {
     const session = this.requireConsumer(request, requestId);
     this.requireOperational(requestId);
+    const method = (request.method ?? "GET").toUpperCase();
     const leaseToken = headerValue(request, "x-charade-lease");
     if (!leaseToken) throw new CharadeError("charade.lease_expired", requestId);
     const found = (this.leases as LeaseStore).findByToken(leaseToken, this.now());
@@ -474,8 +475,15 @@ export class Broker {
     if (!found.lease.services.includes(service.id)) {
       throw new CharadeError("charade.scope_denied", requestId);
     }
+    // The lease pins the grant scope at issue time: services, methods, and paths.
+    if (!found.lease.methods.includes(method)) {
+      throw new CharadeError("charade.scope_denied", requestId);
+    }
+    if (!pathAllowed(found.lease.paths, remainingPath)) {
+      throw new CharadeError("charade.scope_denied", requestId);
+    }
 
-    const decision = classifyAction(service, request.method ?? "GET", remainingPath);
+    const decision = classifyAction(service, method, remainingPath);
     const actor = consumerActor(session);
     if (decision.class === "unknown") {
       this.receipt(actor, "proxy.denied", service.id, "denied", requestId);

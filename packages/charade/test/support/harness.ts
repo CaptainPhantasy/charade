@@ -26,6 +26,13 @@ export interface Capture {
   readonly body: string;
 }
 
+export interface HarnessOptions {
+  /** Pre-sign a grant (default true). Set false when the test creates it through the CLI. */
+  readonly withGrant?: boolean;
+  readonly grantMethods?: readonly string[];
+  readonly grantPaths?: readonly string[];
+}
+
 export interface Harness {
   readonly home: string;
   readonly pass: string;
@@ -43,7 +50,7 @@ export interface Harness {
  * A complete, honest fixture: real vault, signed policy and grant, registry,
  * enrolled device, and a local upstream that records what it received.
  */
-export async function createHarness(): Promise<Harness> {
+export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const now = new Date();
   const home = mkdtempSync(join(tmpdir(), "charade-harness-"));
   const captures: Capture[] = [];
@@ -105,20 +112,22 @@ export async function createHarness(): Promise<Harness> {
 
   const ownerPrivate = open.payload.owner?.privateKey ?? "";
   if (!ownerPrivate) throw new Error("fixture vault has no owner key");
-  addGrant(
-    home,
-    signGrant(ownerPrivate, loadPolicy(home), {
-      consumerId: CONSUMER_ID,
-      deviceId: DEVICE_ID,
-      services: [SERVICE_ID],
-      methods: ["GET", "POST"],
-      paths: ["/v1/*"],
-      durationSeconds: 86_400,
-      ceilings: { callsPerDay: 1_000 },
-      hardStops: { ...DEFAULT_GATES.hardStops },
-      envAllowed: false,
-    }),
-  );
+  if (options.withGrant !== false) {
+    addGrant(
+      home,
+      signGrant(ownerPrivate, loadPolicy(home), {
+        consumerId: CONSUMER_ID,
+        deviceId: DEVICE_ID,
+        services: [SERVICE_ID],
+        methods: options.grantMethods ?? ["GET", "POST"],
+        paths: options.grantPaths ?? ["/v1/*"],
+        durationSeconds: 86_400,
+        ceilings: { callsPerDay: 1_000 },
+        hardStops: { ...DEFAULT_GATES.hardStops },
+        envAllowed: false,
+      }),
+    );
+  }
 
   const deviceFile = join(home, "device.json");
   writeFileSync(

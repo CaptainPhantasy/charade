@@ -103,6 +103,11 @@ function parsePattern(
   return { method: method.toUpperCase(), path };
 }
 
+/** True when the request path matches any granted path pattern. */
+export function pathAllowed(patterns: readonly string[], path: string): boolean {
+  return patterns.some((pattern) => glob(pattern, path));
+}
+
 function glob(pattern: string, value: string): boolean {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
