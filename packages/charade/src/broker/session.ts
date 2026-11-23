@@ -1,9 +1,10 @@
 import { createHash, randomBytes, verify } from "node:crypto";
-import type { OwnerPolicy } from "../core/protocol.js";
+import { SESSION_DOMAIN, type OwnerPolicy } from "../core/protocol.js";
 import type { Registry } from "../registry/registry.js";
 import { publicKeyObject } from "../authority/keys.js";
 
-export const SESSION_DOMAIN = "charade-session-v1\u0000";
+export { SESSION_DOMAIN };
+
 const CHALLENGE_TTL_MS = 60_000;
 
 export type SessionRole = "owner" | "consumer";
