@@ -8,6 +8,7 @@ import { brokerCommand } from "./broker.js";
 import { secretCommand } from "./secret.js";
 import { deviceCommand, registryCommand } from "./registry.js";
 import { callCommand } from "./call.js";
+import { doctorCommand } from "./doctor.js";
 import {
   checkPassphrase,
   passphraseFrom,
@@ -96,6 +97,10 @@ async function main(): Promise<void> {
   }
   if (command === "call") {
     await callCommand(args);
+    return;
+  }
+  if (command === "doctor") {
+    await doctorCommand(args);
     return;
   }
   if (command === "receipts") {
